@@ -13,6 +13,8 @@ add_executable(mario_game
     src/entities/Player.cpp
     src/entities/Enemy.cpp
     src/entities/ParticleSystem.cpp
+    src/entities/Box.cpp
+    src/entities/Coin.cpp
     src/render/CameraController.cpp
     src/render/ParallaxBackground.cpp
     src/render/LightingPass.cpp

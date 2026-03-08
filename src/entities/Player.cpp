@@ -82,7 +82,9 @@ void Player::update(float dt, const InputState& input, const TileMap& map, Parti
         m_jumpCutPending = true;
     }
 
-    const float maxSpeed = input.sprintHeld ? kSprintSpeed : kWalkSpeed;
+    const float maxSpeed = input.turboMode   ? kSprintSpeed * 3.0f
+                         : input.sprintHeld  ? kSprintSpeed
+                                             : kWalkSpeed;
     const bool hasMovementInput = std::abs(input.moveAxis) > 0.01f;
     const float targetSpeed = input.moveAxis * maxSpeed;
 
@@ -244,12 +246,12 @@ void Player::draw(sf::RenderTarget& target) const {
 
     const float legW      = W * 0.24f;
     const float shoeW     = legW * 1.60f;
-    const float hipOff    = W * 0.15f;
+    const float hipOff    = W * 0.04f;  // small offset — side-view legs overlap
 
     const bool  walking   = m_onGround && std::abs(m_velocity.x) > 10.0f;
-    const float maxAng    = 28.0f;
+    const float maxAng    = 32.0f;
     const float phases[2] = { m_walkTimer,  m_walkTimer + 3.14159f };
-    const float hipXs[2]  = { cx - hipOff,  cx + hipOff };
+    const float hipXs[2]  = { cx - fDir * hipOff,  cx + fDir * hipOff };
 
     // ── Arms (drawn behind torso when arm is behind) ──────────────────────
     // Arm behind torso: opposite side to facing direction
@@ -257,9 +259,9 @@ void Player::draw(sf::RenderTarget& target) const {
     // Back arm (behind torso, rendered first)
     {
         const float backSide  = -fDir;  // back arm is on opposite side
-        const float ang       = armSwing * 0.8f;  // slightly less swing for back
+        const float ang       = -armSwing * 0.8f;  // OPPOSITE swing to front arm
         const float rad       = ang * 3.14159f / 180.0f;
-        const float shoulderX = cx + backSide * W * 0.30f;
+        const float shoulderX = cx + backSide * W * 0.08f;  // close to body — side view
         const float shoulderY = torsoTop + torsoH * 0.12f;
 
         sf::RectangleShape arm({armW, armLen});
@@ -280,20 +282,22 @@ void Player::draw(sf::RenderTarget& target) const {
     }
 
     // ── Legs & shoes ─────────────────────────────────────────────────────
+    // Draw back leg first (i=0), then front leg (i=1) for correct layering
     for (int i = 0; i < 2; ++i) {
         const float swingDeg = walking ? std::sin(phases[i]) * maxAng * fDir : 0.0f;
         const float swingRad = swingDeg * 3.14159f / 180.0f;
         const float hx = hipXs[i];
+        const bool isBackLeg = (i == 0);  // back leg is darker for depth
 
-        // Upper leg (dark blue jeans)
+        // Upper leg (dark blue jeans — back leg is darker for depth cue)
         sf::RectangleShape leg({legW, legH * 0.65f});
         leg.setOrigin(legW * 0.5f, 0.0f);
         leg.setPosition(hx, hipY);
         leg.setRotation(swingDeg);
-        leg.setFillColor(sf::Color(31, 77, 181));
+        leg.setFillColor(isBackLeg ? sf::Color(22, 55, 140) : sf::Color(31, 77, 181));
         target.draw(leg);
 
-        // Lower leg (slightly lighter)
+        // Lower leg
         const float kneeLegH = legH * 0.42f;
         const float kneeX = hx + std::sin(swingRad) * legH * 0.65f;
         const float kneeY = hipY + std::cos(swingRad) * legH * 0.65f;
@@ -301,40 +305,40 @@ void Player::draw(sf::RenderTarget& target) const {
         lowerLeg.setOrigin(legW * 0.44f, 0.0f);
         lowerLeg.setPosition(kneeX, kneeY);
         lowerLeg.setRotation(swingDeg * 0.6f);  // slight knee bend
-        lowerLeg.setFillColor(sf::Color(40, 90, 200));
+        lowerLeg.setFillColor(isBackLeg ? sf::Color(28, 68, 160) : sf::Color(40, 90, 200));
         target.draw(lowerLeg);
 
-        // Shoe at foot tip
+        // Shoe at foot tip — stays flat on the ground (no rotation)
         const float footSwingRad = swingDeg * 0.6f * 3.14159f / 180.0f;
         const float fx = kneeX + std::sin(footSwingRad) * kneeLegH;
         const float fy2 = kneeY + std::cos(footSwingRad) * kneeLegH;
         sf::RectangleShape shoe({shoeW, shoeH});
         shoe.setOrigin(shoeW * 0.5f, 0.0f);
         shoe.setPosition(fx, fy2);
-        shoe.setRotation(swingDeg * 0.6f);
-        shoe.setFillColor(sf::Color(40, 18, 5));
+        shoe.setRotation(0.0f);  // shoe stays flat
+        shoe.setFillColor(isBackLeg ? sf::Color(30, 12, 3) : sf::Color(40, 18, 5));
         target.draw(shoe);
         // Shoe highlight
         sf::RectangleShape shoeHL({shoeW * 0.5f, shoeH * 0.35f});
         shoeHL.setOrigin(shoeW * 0.25f, 0.0f);
         shoeHL.setPosition(fx - shoeW * 0.1f, fy2);
-        shoeHL.setRotation(swingDeg * 0.6f);
+        shoeHL.setRotation(0.0f);  // flat highlight
         shoeHL.setFillColor(sf::Color(80, 48, 20, 160));
         target.draw(shoeHL);
     }
 
     // ── Torso (red shirt with overalls bib) ───────────────────────────────
-    sf::RectangleShape torso({W * 0.64f, torsoH});
+    sf::RectangleShape torso({W * 0.44f, torsoH});
     torso.setOrigin(torso.getSize().x * 0.5f, torso.getSize().y);
-    torso.setPosition(cx, hipY);
+    torso.setPosition(cx + fDir * W * 0.06f, hipY);
     torso.setRotation(m_tiltAngle * 0.5f);
     torso.setFillColor(sf::Color(196, 41, 49));
     target.draw(torso);
 
     // Overalls bib (blue rectangle on chest)
-    sf::RectangleShape bib({W * 0.38f, torsoH * 0.55f});
+    sf::RectangleShape bib({W * 0.26f, torsoH * 0.55f});
     bib.setOrigin(bib.getSize().x * 0.5f, bib.getSize().y);
-    bib.setPosition(cx, hipY - torsoH * 0.05f);
+    bib.setPosition(cx + fDir * W * 0.08f, hipY - torsoH * 0.05f);
     bib.setRotation(m_tiltAngle * 0.5f);
     bib.setFillColor(sf::Color(31, 77, 181));
     target.draw(bib);
@@ -342,14 +346,14 @@ void Player::draw(sf::RenderTarget& target) const {
     // Overall strap left
     sf::RectangleShape strapL({W * 0.07f, torsoH * 0.45f});
     strapL.setOrigin(strapL.getSize().x * 0.5f, strapL.getSize().y);
-    strapL.setPosition(cx - W * 0.12f, torsoTop + torsoH * 0.18f);
+    strapL.setPosition(cx + fDir * W * 0.02f, torsoTop + torsoH * 0.18f);
     strapL.setFillColor(sf::Color(31, 77, 181));
     target.draw(strapL);
 
     // Overall strap right
     sf::RectangleShape strapR({W * 0.07f, torsoH * 0.45f});
     strapR.setOrigin(strapR.getSize().x * 0.5f, strapR.getSize().y);
-    strapR.setPosition(cx + W * 0.12f, torsoTop + torsoH * 0.18f);
+    strapR.setPosition(cx + fDir * W * 0.14f, torsoTop + torsoH * 0.18f);
     strapR.setFillColor(sf::Color(31, 77, 181));
     target.draw(strapR);
 
@@ -357,7 +361,7 @@ void Player::draw(sf::RenderTarget& target) const {
     for (int b = -1; b <= 1; b += 2) {
         sf::CircleShape btn(W * 0.045f, 8);
         btn.setOrigin(btn.getRadius(), btn.getRadius());
-        btn.setPosition(cx + b * W * 0.095f, hipY - torsoH * 0.52f);
+        btn.setPosition(cx + fDir * W * 0.08f + b * W * 0.05f, hipY - torsoH * 0.52f);
         btn.setFillColor(sf::Color(255, 210, 60));
         target.draw(btn);
     }
@@ -367,7 +371,7 @@ void Player::draw(sf::RenderTarget& target) const {
         const float frontSide = fDir;
         const float ang       = armSwing;
         const float rad       = ang * 3.14159f / 180.0f;
-        const float shoulderX = cx + frontSide * W * 0.30f;
+        const float shoulderX = cx + frontSide * W * 0.12f;  // close to body — side view
         const float shoulderY = torsoTop + torsoH * 0.12f;
 
         sf::RectangleShape arm({armW, armLen});
@@ -389,7 +393,7 @@ void Player::draw(sf::RenderTarget& target) const {
     // ── Neck ──────────────────────────────────────────────────────────────
     sf::RectangleShape neck({W * 0.22f, H * 0.06f});
     neck.setOrigin(neck.getSize().x * 0.5f, neck.getSize().y);
-    neck.setPosition(cx, torsoTop + H * 0.02f);
+    neck.setPosition(cx + fDir * W * 0.06f, torsoTop + H * 0.02f);
     neck.setFillColor(sf::Color(246, 206, 165));
     target.draw(neck);
 

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace {
 constexpr float kEnemySpeed   = 90.0f;
@@ -30,7 +31,10 @@ void Enemy::update(float dt, const TileMap& map, sf::Vector2f playerPos) {
     // --- waiting to respawn ---
     if (m_respawning) {
         m_respawnTimer -= dt;
-        if (m_respawnTimer <= 0.0f) respawn();
+        if (m_respawnTimer <= 0.0f) {
+            pickRandomSpawn(map, playerPos);
+            respawn();
+        }
         return;
     }
 
@@ -47,6 +51,32 @@ void Enemy::update(float dt, const TileMap& map, sf::Vector2f playerPos) {
     // --- normal movement: chase player horizontally ---
     const float dx = playerPos.x - m_position.x;
     m_velocity.x   = (dx > 0.0f ? 1.0f : -1.0f) * kEnemySpeed;
+
+    // Keep enemies on their current platform/floor: if there is no support
+    // one step ahead, turn around instead of walking off the edge.
+    {
+        const float dir = (m_velocity.x >= 0.0f) ? 1.0f : -1.0f;
+        const float ts  = static_cast<float>(map.tileSize());
+
+        sf::FloatRect footProbe(
+            m_position.x - m_size.x * 0.35f,
+            m_position.y + 1.0f,
+            m_size.x * 0.70f,
+            3.0f);
+        const bool onGround = !map.querySolidTiles(footProbe).empty();
+
+        if (onGround) {
+            sf::FloatRect aheadProbe(
+                m_position.x + dir * (m_size.x * 0.5f + ts * 0.35f) - ts * 0.20f,
+                m_position.y + 2.0f,
+                ts * 0.40f,
+                ts * 0.35f);
+            const bool hasSupportAhead = !map.querySolidTiles(aheadProbe).empty();
+            if (!hasSupportAhead) {
+                m_velocity.x = -m_velocity.x;
+            }
+        }
+    }
 
     m_velocity.y = std::min(m_velocity.y + kGravity * dt, kMaxFall);
 
@@ -183,3 +213,37 @@ sf::FloatRect Enemy::bounds() const {
 sf::Vector2f Enemy::position() const { return m_position; }
 
 bool Enemy::isActive() const { return !m_killed && !m_respawning; }
+
+void Enemy::pickRandomSpawn(const TileMap& map, sf::Vector2f playerPos) {
+    const auto& rows = map.rows();
+    const int   h    = static_cast<int>(rows.size());
+    const int   w    = h > 0 ? static_cast<int>(rows[0].size()) : 0;
+    const float ts   = static_cast<float>(map.tileSize());
+    const float safeR = ts * 8.0f;  // min distance from player
+    const int groundRow = h - 2;
+    const int currentRow = static_cast<int>(std::lround(m_spawnPos.y / ts));
+    const bool wantGround = (currentRow == groundRow);
+
+    // Try up to 200 random positions to find a valid surface tile
+    for (int attempt = 0; attempt < 200; ++attempt) {
+        const int rx = std::rand() % w;
+        const int ry = std::rand() % (h - 1);
+        const char cell  = rows[static_cast<std::size_t>(ry)][static_cast<std::size_t>(rx)];
+        const char below = rows[static_cast<std::size_t>(ry + 1)][static_cast<std::size_t>(rx)];
+        if (cell == '#' || cell == 'S' || below != '#') continue;
+
+        const bool candidateGround = (ry + 1 == groundRow);
+        if (candidateGround != wantGround) continue;
+
+        const float px = static_cast<float>(rx) * ts + ts * 0.5f;
+        const float py = static_cast<float>(ry + 1) * ts;
+
+        const float dx = px - playerPos.x;
+        const float dy = py - playerPos.y;
+        if (dx * dx + dy * dy < safeR * safeR) continue;
+
+        m_spawnPos = {px, py};
+        return;
+    }
+    // Fallback: keep current spawnPos if no valid spot found
+}

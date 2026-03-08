@@ -6,6 +6,8 @@
 #include <SFML/Window/Keyboard.hpp>
 
 #include <algorithm>
+#include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -193,6 +195,9 @@ void Game::processEvents() {
                 if (event.key.code == sf::Keyboard::Escape) {
                     m_state = GameState::Menu;
                 }
+                if (event.key.code == sf::Keyboard::R) {
+                    m_turboMode = !m_turboMode;
+                }
             }
         }
     }
@@ -215,6 +220,7 @@ void Game::update(float dt) {
         input.moveAxis += 1.0f;
     }
     input.sprintHeld = sf::Keyboard::isKeyPressed(sf::Keyboard::LShift);
+    input.turboMode  = m_turboMode;
 
     const bool jumpHeld = sf::Keyboard::isKeyPressed(sf::Keyboard::Space) ||
                           sf::Keyboard::isKeyPressed(sf::Keyboard::W) || sf::Keyboard::isKeyPressed(sf::Keyboard::Up);
@@ -247,6 +253,7 @@ void Game::update(float dt) {
                 m_score += 100;
             } else {
                 if (m_score > m_highScore) m_highScore = m_score;
+                if (m_coinCount > m_coinHighScore) m_coinHighScore = m_coinCount;
                 saveHighScore();
                 m_state = GameState::GameOver;
                 return;
@@ -254,6 +261,46 @@ void Game::update(float dt) {
         }
     }
     // ---- end enemy ----
+
+    // ---- box update & head-hit detection ----
+    for (auto& box : m_boxes) {
+        box.update(dt);
+        if (!box.isActive()) continue;
+
+        const sf::FloatRect pb = m_player.bounds();
+        const sf::FloatRect bb = box.bounds();
+        sf::FloatRect overlap;
+        if (pb.intersects(bb, overlap)) {
+            // Mario must be hitting from below: his head (top of pb) is near the bottom of the box
+            const float playerTop = pb.top;
+            const float boxBottom = bb.top + bb.height;
+            if (playerTop <= boxBottom && playerTop >= bb.top + bb.height * 0.5f
+                && m_player.position().y > bb.top + bb.height) {
+                sf::Vector2f coinPos = box.hit(m_particles);
+                m_coins.emplace_back(coinPos);
+            }
+        }
+    }
+
+    // ---- coin update & collection ----
+    for (auto& coin : m_coins) {
+        coin.update(dt, m_map);
+        if (coin.isCollectable() && !coin.isCollected()) {
+            const sf::FloatRect pb = m_player.bounds();
+            const sf::FloatRect cb = coin.bounds();
+            if (pb.intersects(cb)) {
+                coin.collect();
+                m_coinCount += 1;
+                m_score += 200;
+            }
+        }
+    }
+    // Remove fully expired coins
+    m_coins.erase(
+        std::remove_if(m_coins.begin(), m_coins.end(),
+                       [](const Coin& c) { return c.isExpired(); }),
+        m_coins.end());
+    // ---- end coin ----
 
     const sf::FloatRect worldBounds(0.0f, 0.0f, static_cast<float>(m_map.pixelWidth()),
                                     static_cast<float>(m_map.pixelHeight()));
@@ -289,6 +336,7 @@ void Game::update(float dt) {
 
     if (m_player.position().y > groundY + 200.0f) {
         if (m_score > m_highScore) m_highScore = m_score;
+        if (m_coinCount > m_coinHighScore) m_coinHighScore = m_coinCount;
         saveHighScore();
         m_state = GameState::GameOver;
     }
@@ -305,6 +353,12 @@ void Game::render() {
     m_background.draw(scene, m_camera.view(), worldBounds);
     m_map.draw(scene, m_camera.view());
     m_player.draw(scene);
+    for (const auto& box : m_boxes) {
+        box.draw(scene);
+    }
+    for (const auto& coin : m_coins) {
+        coin.draw(scene);
+    }
     for (const auto& enemy : m_enemies) {
         enemy.draw(scene);
     }
@@ -426,6 +480,19 @@ void Game::renderGameOver() {
     hsTxt.setPosition(W * 0.5f, H * 0.575f);
     m_window.draw(hsTxt);
 
+    // Coin stats line
+    const bool isNewCoinRecord = (m_coinCount > 0 && m_coinCount >= m_coinHighScore);
+    const std::string coinStr = "Coins:  " + std::to_string(m_coinCount)
+        + (isNewCoinRecord ? "  \u2605 BEST!" : "   Best:  " + std::to_string(m_coinHighScore));
+    sf::Text coinTxt(coinStr, m_font, 34);
+    coinTxt.setFillColor(isNewCoinRecord ? sf::Color(255, 230, 50) : sf::Color(210, 210, 120));
+    coinTxt.setOutlineColor(sf::Color(0, 0, 0));
+    coinTxt.setOutlineThickness(2.f);
+    const auto ct = coinTxt.getLocalBounds();
+    coinTxt.setOrigin(ct.left + ct.width * 0.5f, ct.top + ct.height * 0.5f);
+    coinTxt.setPosition(W * 0.5f, H * 0.645f);
+    m_window.draw(coinTxt);
+
     sf::Text restart("Press  R  or  ENTER  to  Restart", m_font, 40);
     restart.setFillColor(sf::Color(255, 255, 255));
     restart.setOutlineColor(sf::Color(0, 0, 0));
@@ -447,63 +514,162 @@ void Game::renderGameOver() {
 
 void Game::resetGame() {
     m_score        = 0;
+    m_coinCount    = 0;
+    m_turboMode    = false;
     m_timePlayed   = 0.0f;
     m_bonusTimer   = 0.0f;
     m_respawnTimer = 2.0f;
     m_player.reset(m_spawnPosition);
     m_prevJumpHeld = false;
     m_accumulator  = 0.0f;
+    m_coins.clear();
     const sf::FloatRect worldBounds(0.0f, 0.0f,
         static_cast<float>(m_map.pixelWidth()),
         static_cast<float>(m_map.pixelHeight()));
     m_camera.update(10.0f, m_spawnPosition + sf::Vector2f(170.0f, -150.0f), worldBounds, 1.0f);
     spawnEnemies();
+    spawnBoxes();
 }
 
 void Game::spawnEnemies() {
     m_enemies.clear();
-    const int   h   = static_cast<int>(m_map.rows().size());  // 44
-    const float ts  = static_cast<float>(m_map.tileSize());   // 64
-    const int   g   = h - 2;       // L1 ground row
-    const int   l2f = h / 2;       // L2 floor row
 
-    // helper: place one enemy at the centre of a platform
-    auto spawnOn = [&](int x0, int x1, int surfaceRow) {
-        const float cx = (static_cast<float>(x0 + x1) * 0.5f) * ts + ts * 0.5f;
-        const float cy = static_cast<float>(surfaceRow) * ts;
-        m_enemies.emplace_back(sf::Vector2f(cx, cy));
+    // Seed the random number generator
+    static bool seeded = false;
+    if (!seeded) { std::srand(static_cast<unsigned>(std::time(nullptr))); seeded = true; }
+
+    const auto& rows = m_map.rows();
+    const int   h    = static_cast<int>(rows.size());
+    const int   w    = static_cast<int>(rows[0].size());
+    const float ts   = static_cast<float>(m_map.tileSize());
+    const int   groundRow = h - 2;  // the main L1 ground row
+
+    struct SpawnSlot { float x; float y; };
+    std::vector<SpawnSlot> groundSlots;   // on the main ground floor
+    std::vector<SpawnSlot> elevatedSlots; // on platforms / upper levels
+
+    for (int y = 0; y < h - 1; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const char cell  = rows[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)];
+            const char below = rows[static_cast<std::size_t>(y + 1)][static_cast<std::size_t>(x)];
+            if (cell != '#' && cell != 'S' && below == '#') {
+                const float px = static_cast<float>(x) * ts + ts * 0.5f;
+                const float py = static_cast<float>(y + 1) * ts;
+                if (y + 1 == groundRow) {
+                    groundSlots.push_back({px, py});
+                } else {
+                    elevatedSlots.push_back({px, py});
+                }
+            }
+        }
+    }
+
+    // Shuffle both pools
+    auto shuffle = [](std::vector<SpawnSlot>& v) {
+        if (v.size() < 2) return;
+        for (std::size_t i = v.size() - 1; i > 0; --i) {
+            const std::size_t j = static_cast<std::size_t>(std::rand()) % (i + 1);
+            std::swap(v[i], v[j]);
+        }
+    };
+    shuffle(groundSlots);
+    shuffle(elevatedSlots);
+
+    // Fixed counts: 8 on ground, 8 on elevated — always exactly 50/50
+    const int halfCount    = 8;
+    const float safeRadius = ts * 8.0f;
+
+    auto spawnFrom = [&](std::vector<SpawnSlot>& pool, int count) {
+        int spawned = 0;
+        for (const auto& slot : pool) {
+            if (spawned >= count) break;
+            const float dx = slot.x - m_spawnPosition.x;
+            const float dy = slot.y - m_spawnPosition.y;
+            if (dx * dx + dy * dy < safeRadius * safeRadius) continue;
+            m_enemies.emplace_back(sf::Vector2f(slot.x, slot.y));
+            ++spawned;
+        }
     };
 
-    // ── L1 ground floor
-    for (float tx : {12.f, 28.f, 52.f, 68.f, 88.f, 108.f, 130.f, 160.f, 188.f, 210.f})
-        m_enemies.emplace_back(sf::Vector2f(tx * ts + ts * 0.5f, static_cast<float>(g) * ts));
+    spawnFrom(groundSlots,   halfCount);
+    spawnFrom(elevatedSlots, halfCount);
+}
 
-    // ── L1 floating platforms
-    spawnOn(7,   16,  g - 3);
-    spawnOn(22,  29,  g - 3);
-    spawnOn(47,  56,  g - 3);
-    spawnOn(64,  71,  g - 4);
-    spawnOn(79,  91,  g - 3);
-    spawnOn(131, 151, g - 3);
-    spawnOn(158, 168, g - 3);
-    spawnOn(179, 195, g - 3);
-    spawnOn(202, 215, g - 4);
+void Game::spawnBoxes() {
+    m_boxes.clear();
 
-    // ── L2 ground floor
-    for (float tx : {5.f, 30.f, 50.f, 70.f, 95.f, 120.f, 145.f, 170.f, 195.f, 215.f})
-        m_enemies.emplace_back(sf::Vector2f(tx * ts + ts * 0.5f, static_cast<float>(l2f) * ts));
+    const auto& rows = m_map.rows();
+    const int   h    = static_cast<int>(rows.size());
+    const int   w    = h > 0 ? static_cast<int>(rows[0].size()) : 0;
+    const float ts   = static_cast<float>(m_map.tileSize());
 
-    // ── L2 floating platforms
-    spawnOn(0,   18,  l2f - 5);
-    spawnOn(24,  38,  l2f - 7);
-    spawnOn(44,  60,  l2f - 5);
-    spawnOn(66,  80,  l2f - 8);
-    spawnOn(86,  105, l2f - 5);
-    spawnOn(110, 128, l2f - 7);
-    spawnOn(134, 152, l2f - 5);
-    spawnOn(158, 174, l2f - 8);
-    spawnOn(180, 200, l2f - 5);
-    spawnOn(205, 219, l2f - 6);
+    // Valid box position: empty tile with 1 empty tile above (coin pops out)
+    // and exactly 2 empty tiles below (Mario head room), then solid ground
+    // within 3 tiles below that (reachable by a normal jump).
+    struct BoxSlot { float x; float y; };
+    std::vector<BoxSlot> validSlots;
+
+    for (int y = 2; y < h - 3; ++y) {
+        for (int x = 1; x < w - 1; ++x) {
+            const char cell  = rows[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)];
+            if (cell != '.') continue;  // must be empty
+
+            // Need 1 empty tile above (so coin can pop out)
+            const char above = rows[static_cast<std::size_t>(y - 1)][static_cast<std::size_t>(x)];  
+            if (above == '#') continue;
+
+            // Need 2 empty tiles below (Mario's body needs room to jump)
+            if (y + 2 >= h) continue;
+            const char below1 = rows[static_cast<std::size_t>(y + 1)][static_cast<std::size_t>(x)];
+            const char below2 = rows[static_cast<std::size_t>(y + 2)][static_cast<std::size_t>(x)];
+            if (below1 == '#' || below2 == '#') continue;
+
+            // Must have a solid ground tile exactly 3 tiles below (jump-reachable)
+            // This keeps boxes at a consistent, reachable height
+            bool hasGround = false;
+            for (int dy = 3; dy <= 4 && y + dy < h; ++dy) {
+                if (rows[static_cast<std::size_t>(y + dy)][static_cast<std::size_t>(x)] == '#') {
+                    hasGround = true;
+                    break;
+                }
+            }
+            if (!hasGround) continue;
+
+            const float px = static_cast<float>(x) * ts + ts * 0.5f;
+            const float py = static_cast<float>(y) * ts + ts * 0.5f;
+            validSlots.push_back({px, py});
+        }
+    }
+
+    if (validSlots.empty()) return;
+
+    // Shuffle
+    for (std::size_t i = validSlots.size() - 1; i > 0; --i) {
+        const std::size_t j = static_cast<std::size_t>(std::rand()) % (i + 1);
+        std::swap(validSlots[i], validSlots[j]);
+    }
+
+    // Spawn 25-35 boxes spread across the map
+    const int desiredCount = std::min(35, std::max(25, static_cast<int>(validSlots.size()) / 12));
+    const float minDist    = ts * 4.0f;  // boxes must be spaced at least 4 tiles apart
+
+    for (const auto& slot : validSlots) {
+        if (static_cast<int>(m_boxes.size()) >= desiredCount) break;
+
+        // Ensure minimum spacing between boxes
+        bool tooClose = false;
+        for (const auto& existing : m_boxes) {
+            const float dx = slot.x - existing.position().x;
+            const float dy = slot.y - existing.position().y;
+            if (dx * dx + dy * dy < minDist * minDist) {
+                tooClose = true;
+                break;
+            }
+        }
+        if (tooClose) continue;
+
+        m_boxes.emplace_back(sf::Vector2f(slot.x, slot.y), ts);
+    }
 }
 
 void Game::drawHUD() {
@@ -562,6 +728,49 @@ void Game::drawHUD() {
     enemyCount.setOutlineThickness(2.f);
     enemyCount.setPosition(pad + 12.f, pad + 88.f);
     m_window.draw(enemyCount);
+
+    // Coin count pill background
+    sf::RectangleShape pill3({270.f, 56.f});
+    pill3.setPosition(pad, pad + 132.f);
+    pill3.setFillColor(sf::Color(0, 0, 0, 150));
+    m_window.draw(pill3);
+
+    // Coin icon (small yellow circle)
+    sf::CircleShape coinIcon(10.f, 12);
+    coinIcon.setOrigin(coinIcon.getRadius(), coinIcon.getRadius());
+    coinIcon.setPosition(pad + 22.f, pad + 150.f);
+    coinIcon.setFillColor(sf::Color(255, 210, 40));
+    m_window.draw(coinIcon);
+
+    sf::Text coinLabel("COINS", m_font, 22);
+    coinLabel.setFillColor(sf::Color(255, 210, 40));
+    coinLabel.setPosition(pad + 38.f, pad + 136.f);
+    m_window.draw(coinLabel);
+
+    sf::Text coinCountTxt(std::to_string(m_coinCount), m_font, 30);
+    coinCountTxt.setFillColor(sf::Color::White);
+    coinCountTxt.setOutlineColor(sf::Color(0, 0, 0, 180));
+    coinCountTxt.setOutlineThickness(2.f);
+    coinCountTxt.setPosition(pad + 38.f, pad + 154.f);
+    m_window.draw(coinCountTxt);
+
+    // Turbo mode indicator
+    if (m_turboMode) {
+        sf::RectangleShape turboPill({200.f, 44.f});
+        turboPill.setPosition(pad, pad + 198.f);
+        turboPill.setFillColor(sf::Color(200, 30, 30, 200));
+        m_window.draw(turboPill);
+        sf::Text turboTxt(">> TURBO <<", m_font, 26);
+        turboTxt.setFillColor(sf::Color(255, 240, 60));
+        turboTxt.setOutlineColor(sf::Color(80, 0, 0));
+        turboTxt.setOutlineThickness(2.f);
+        turboTxt.setPosition(pad + 10.f, pad + 204.f);
+        m_window.draw(turboTxt);
+    }
+    sf::Text coinBest("BEST " + std::to_string(m_coinHighScore), m_font, 18);
+    coinBest.setFillColor(sf::Color(255, 215, 0, 180));
+    coinBest.setPosition(pad + 148.f, pad + 140.f);
+    m_window.draw(coinBest);
 }
 // ── Persistent high score ──────────────────────────────────────────────────
 
@@ -572,11 +781,15 @@ static std::string highScorePath() {
 
 void Game::loadHighScore() {
     std::ifstream f(highScorePath());
-    if (f.is_open()) f >> m_highScore;
+    if (f.is_open()) {
+        f >> m_highScore;
+        if (!(f >> m_coinHighScore)) m_coinHighScore = 0;
+    }
     if (m_highScore < 0) m_highScore = 0;
+    if (m_coinHighScore < 0) m_coinHighScore = 0;
 }
 
 void Game::saveHighScore() {
     std::ofstream f(highScorePath());
-    if (f.is_open()) f << m_highScore;
+    if (f.is_open()) f << m_highScore << '\n' << m_coinHighScore;
 }

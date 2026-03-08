@@ -5,6 +5,8 @@
 #include "entities/Enemy.hpp"
 #include "entities/ParticleSystem.hpp"
 #include "entities/Player.hpp"
+#include "entities/Box.hpp"
+#include "entities/Coin.hpp"
 #include "render/CameraController.hpp"
 #include "render/LightingPass.hpp"
 #include "render/ParallaxBackground.hpp"
@@ -27,6 +29,7 @@ private:
     void renderGameOver();
     void resetGame();
     void spawnEnemies();
+    void spawnBoxes();
     void drawHUD();
     void loadHighScore();
     void saveHighScore();
@@ -39,6 +42,8 @@ private:
     ParallaxBackground m_background;
     LightingPass m_lighting;
     std::vector<Enemy> m_enemies;
+    std::vector<Box>   m_boxes;
+    std::vector<Coin>  m_coins;
 
     GameState m_state = GameState::Menu;
     sf::Font m_font;
@@ -47,10 +52,13 @@ private:
 
     int   m_score          = 0;
     int   m_highScore      = 0;
+    int   m_coinCount      = 0;
+    int   m_coinHighScore  = 0;
     float m_timePlayed     = 0.0f;  // seconds alive this run — grants bonus points
     float m_bonusTimer     = 0.0f;  // counts toward next survival bonus
     float m_respawnTimer   = 0.0f;
     bool  m_prevJumpHeld   = false;
+    bool  m_turboMode      = false;
     float m_accumulator    = 0.0f;
     sf::Clock m_frameClock;
 };

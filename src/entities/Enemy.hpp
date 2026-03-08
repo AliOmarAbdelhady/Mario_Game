@@ -17,6 +17,8 @@ public:
     bool isActive() const;   // alive and visible (not in respawn cooldown)
 
     void stomp(ParticleSystem& particles);
+    /// Pick a new random surface tile for respawn (avoids playerPos)
+    void pickRandomSpawn(const TileMap& map, sf::Vector2f playerPos);
 
 private:
     void resolveHorizontal(const TileMap& map);
